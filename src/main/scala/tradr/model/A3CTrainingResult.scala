@@ -2,7 +2,7 @@ package tradr.model
 
 
 import play.api.libs.json.{Json, Reads, Writes}
-import tradr.common.predictor.TrainingResult
+import tradr.common.trainer.TrainingResult
 
 object A3cTrainingResult {
 

@@ -13,11 +13,8 @@ import org.deeplearning4j.util.ModelSerializer
 import org.nd4j.linalg.activations.Activation
 import org.nd4j.linalg.api.ndarray.INDArray
 import org.nd4j.linalg.factory.Nd4j
-import play.api.libs.json.Json
 import tradr.common.trading.Trade
-import tradr.common.PricingPoint
 import tradr.common.models.Model
-import tradr.common.predictor.{Model, PredictorResult}
 
 import scala.collection.mutable
 import collection.JavaConverters._
@@ -38,18 +35,18 @@ object A3CModel {
     if (f.exists()) {
       val network = ModelSerializer.restoreComputationGraph(saveFile)
       network.init()
-      A3CModel(network)
+      A3CModel(id, network)
     } else {
-      create(conf)
+      create(id, conf)
     }
   }
 
-  def create(conf: Config): A3CModel = {
+  def create(id: String, conf: Config): A3CModel = {
 
     val graphConf = getComputationGraph(conf)
     val net = new ComputationGraph(graphConf)
     net.init()
-    A3CModel(net)
+    A3CModel(id, net)
   }
 
   def save(model: A3CModel, conf: Config, id: String): Unit = {
@@ -213,19 +210,6 @@ case class A3CModel(
                      gamma: Double = 0.99
                    ) extends Model {
 
-  def apply(): Model = {
-    val conf = ConfigFactory.load()
-    A3CModel.create(conf)
-  }
-
-  def save(conf: Config): Unit = {
-
-  }
-
-  def load(conf: Config): Model = {
-    A3CModel.create(conf)
-  }
-
   /**
     * Predict for a given frame and return the action probabilities
     * @return
@@ -278,7 +262,7 @@ case class A3CModel(
     }
 
 
-    save(id, conf)
+    A3CModel.save(this, conf, id)
   }
 }
 
