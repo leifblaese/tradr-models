@@ -154,7 +154,7 @@ object A3CModel {
             )
           )
 
-          seq ++ holdTrades ++ Array(trade.tradeSequence(end))
+          seq ++ holdTrades ++ Array(trade.tradeSequence(i))
 
         }
       }
