@@ -164,63 +164,63 @@ object A3CModel {
   }
 
 
-  /**
-    * Compute the gradient map (gradient for each variable) from the trade.
-    * We do this explicitely so that save one forward pass
-    * @param network
-    * @param trade
-    * @param gamma
-    * @param profit
-    * @return
-    */
-  def computeGradientMap(network: ComputationGraph,
-                         trade: Trade,
-                         gamma: Double,
-                         profit: Double): mutable.Map[String, INDArray] = {
-    val r = profit/trade.tradeSequence.size
-    var initR = trade.tradeSequence.last.valuePrediction.head
-    val initialGradient: collection.mutable.Map[String, INDArray] = collection.mutable.Map()
-
-    val totalGradient = trade
-      .tradeSequence
-      .indices
-      .reverse
-      .drop(1)
-      .foreach{
-        //@ TODO: DO WE NEED TO CHANGE THE COMPUTATION OF R? SHOULDN'T IT BE A FOLD OVER ALL ELEMENTS, INSTEAD OF A FOREACH
-        case i =>
-          val partialTrade = trade.tradeSequence(i)
-          val td = 1.0 + Math.log(trade.tradeSequence.last.time.toDouble - partialTrade.time.toDouble)
-          val R = initR * Math.pow(gamma,td) + i * r
-
-          val actionProb = partialTrade.actionProbabilities
-          val valuePred = partialTrade.valuePrediction.head
-
-          val actionProbError = actionProb.map(Math.log).map(_ * (R - valuePred))
-          val valueFunError = Math.pow(R - valuePred, 2.0)
-
-          // Do a backward pass through the network
-          val currentGradient: Gradient = network
-            .backpropGradient(
-              Nd4j.create(actionProbError),
-              Nd4j.create(Array(valueFunError))
-            )
-
-
-          val gradForVar = currentGradient.gradientForVariable()
-          gradForVar
-            .asScala
-            .foreach{
-              case (key, grad) =>
-                if (!initialGradient.contains(key)) {
-                  initialGradient.update(key, grad)
-                } else {
-                  initialGradient.update(key, initialGradient(key).add(grad))
-                }
-            }
-      }
-    initialGradient
-  }
+//  /**
+//    * Compute the gradient map (gradient for each variable) from the trade.
+//    * We do this explicitely so that save one forward pass
+//    * @param network
+//    * @param trade
+//    * @param gamma
+//    * @param profit
+//    * @return
+//    */
+//  def computeGradientMap(network: ComputationGraph,
+//                         trade: Trade,
+//                         gamma: Double,
+//                         profit: Double): mutable.Map[String, INDArray] = {
+//    val r = profit/trade.tradeSequence.size
+//    var initR = trade.tradeSequence.last.valuePrediction.head
+//    val initialGradient: collection.mutable.Map[String, INDArray] = collection.mutable.Map()
+//
+//    val totalGradient = trade
+//      .tradeSequence
+//      .indices
+//      .reverse
+//      .drop(1)
+//      .foreach{
+//        //@ TODO: DO WE NEED TO CHANGE THE COMPUTATION OF R? SHOULDN'T IT BE A FOLD OVER ALL ELEMENTS, INSTEAD OF A FOREACH
+//        case i =>
+//          val partialTrade = trade.tradeSequence(i)
+//          val td = 1.0 + Math.log(trade.tradeSequence.last.time.toDouble - partialTrade.time.toDouble)
+//          val R = initR * Math.pow(gamma,td) + i * r
+//
+//          val actionProb = partialTrade.actionProbabilities
+//          val valuePred = partialTrade.valuePrediction.head
+//
+//          val actionProbError = actionProb.map(Math.log).map(_ * (R - valuePred))
+//          val valueFunError = Math.pow(R - valuePred, 2.0)
+//
+//          // Do a backward pass through the network
+//          val currentGradient: Gradient = network
+//            .backpropGradient(
+//              Nd4j.create(actionProbError),
+//              Nd4j.create(Array(valueFunError))
+//            )
+//
+//
+//          val gradForVar = currentGradient.gradientForVariable()
+//          gradForVar
+//            .asScala
+//            .foreach{
+//              case (key, grad) =>
+//                if (!initialGradient.contains(key)) {
+//                  initialGradient.update(key, grad)
+//                } else {
+//                  initialGradient.update(key, initialGradient(key).add(grad))
+//                }
+//            }
+//      }
+//    initialGradient
+//  }
 
   /**
     * Compute the gradient for a given gradient map
@@ -271,18 +271,18 @@ case class A3CModel(
     * @return
     */
   def train(trades: Array[Trade]): Unit = {
-    val conf = ConfigFactory.load()
-    trades.foreach{
-      trade =>
-        val partialTrade = trade.tradeSequence.head
-        val profit = Trade.computeProfit(trade)
-        val gradientMap = A3CModel.computeGradientMap(network, trade, gamma, profit)
-        val gradient = A3CModel.toGradient(gradientMap)
-        network.update(gradient)
-    }
-
-
-    A3CModel.save(this, conf, id)
+//    val conf = ConfigFactory.load()
+//    trades.foreach{
+//      trade =>
+//        val partialTrade = trade.tradeSequence.head
+//        val profit = Trade.computeProfit(trade)
+//        val gradientMap = A3CModel.computeGradientMap(network, trade, gamma, profit)
+//        val gradient = A3CModel.toGradient(gradientMap)
+//        network.update(gradient)
+//    }
+//
+//
+//    A3CModel.save(this, conf, id)
   }
 }
 

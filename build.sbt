@@ -2,7 +2,7 @@
 lazy val libdeps = Seq(
   "org.deeplearning4j" % "deeplearning4j-core" % "0.9.1",
   "org.nd4j" % "nd4j-native-platform" % "0.9.1",
-  "tradr" %% "tradr-common" % "0.0.3"
+  "tradr" %% "tradr-common" % "0.0.+"
 )
 
 
