@@ -267,7 +267,9 @@ case class A3CModel(
     * Train the model on a given set of trades
     * @return
     */
-  def train(trades: Array[Trade]): Unit = {
+  def train(trades: Array[Trade]): Model = {
+    this
+
 //    val conf = ConfigFactory.load()
 //    trades.foreach{
 //      trade =>
