@@ -13,7 +13,7 @@ import org.deeplearning4j.util.ModelSerializer
 import org.nd4j.linalg.activations.Activation
 import org.nd4j.linalg.api.ndarray.INDArray
 import org.nd4j.linalg.factory.Nd4j
-import tradr.common.trading.Trade
+import tradr.common.trading.{Action, Instruments, PartialTrade, Trade}
 import tradr.common.models.Model
 
 import scala.collection.mutable
@@ -126,6 +126,42 @@ object A3CModel {
       .build()
   }
 
+  def getRateFromCassandra(instrument: Instruments.Value, start: Long, end: Long) = {
+
+
+
+  }
+
+  def padTradesWithHold(trade: Trade, config: Config) = {
+    val tradeInterval = config.getInt("tradr.trader.interval")
+
+
+    trade
+      .tradeSequence
+      .indices
+      .drop(1)
+      .foldLeft(Seq(trade.tradeSequence.head)){
+        case (seq, i) => {
+
+          // Get the time diff in seconds. For each second that no trade occurred we assume
+          // The proposed action was a HOLD
+          val start = trade.tradeSequence(i-1).time + tradeInterval
+          val end = trade.tradeSequence(i).time
+
+          val holdTrades = (start until end by tradeInterval).map(
+            t => trade.tradeSequence.head.copy(
+              id = t,
+              action = Action.Hold,
+              time = t,
+              portfolioChange = trade.tradeSequence.head.portfolioChange.mapValues(_ => 0.0)
+            )
+          )
+
+          seq ++ holdTrades ++ Array(trade.tradeSequence(end))
+
+        }
+      }
+  }
 
 
   /**
@@ -229,22 +265,6 @@ case class A3CModel(
       .toMap
   }
 
-  //  /**
-  //    * Train the network on one complete Trade (i.e. sequence of buys and sells).
-  //    * Unit return because memory is updated in place
-  //    * @param a3c
-  //    * @param trade
-  //    */
-  //  def train(a3c: A3CModel, trade: Trade): Unit = {
-  //    val network = a3c.network
-  //    // Get a partial trade
-  //    val partialTrade = trade.tradeSequence.head
-  //
-  //    val profit = Trade.computeProfit(trade)
-  //    val gradientMap = computeGradientMap(a3c.network, trade, a3c.gamma, profit)
-  //    val gradient = toGradient(gradientMap)
-  //    network.update(gradient)
-  //  }
 
   /**
     * Train the model on a given set of trades
