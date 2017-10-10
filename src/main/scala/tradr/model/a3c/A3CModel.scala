@@ -1,23 +1,20 @@
-package tradr.model
+package tradr.model.a3c
 
 import java.io.File
 
-import com.typesafe.config.{Config, ConfigFactory}
-import org.deeplearning4j.nn.conf.{ComputationGraphConfiguration, NeuralNetConfiguration, Updater}
+import com.typesafe.config.Config
 import org.deeplearning4j.nn.conf.inputs.InputType
 import org.deeplearning4j.nn.conf.layers.{ConvolutionLayer, DenseLayer}
-import org.deeplearning4j.nn.gradient.{DefaultGradient, Gradient}
+import org.deeplearning4j.nn.conf.{ComputationGraphConfiguration, NeuralNetConfiguration}
+import org.deeplearning4j.nn.gradient.DefaultGradient
 import org.deeplearning4j.nn.graph.ComputationGraph
 import org.deeplearning4j.nn.weights.WeightInit
 import org.deeplearning4j.util.ModelSerializer
 import org.nd4j.linalg.activations.Activation
 import org.nd4j.linalg.api.ndarray.INDArray
 import org.nd4j.linalg.factory.Nd4j
-import tradr.common.trading.{Action, Instruments, PartialTrade, Trade}
 import tradr.common.models.Model
-
-import scala.collection.mutable
-import collection.JavaConverters._
+import tradr.common.trading.{Action, Instruments, Trade}
 
 object A3CModel {
 

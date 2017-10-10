@@ -1,5 +1,4 @@
-package tradr.model
-
+package tradr.model.a3c
 
 import play.api.libs.json.{Json, Reads, Writes}
 import tradr.common.trainer.TrainingResult
