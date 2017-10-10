@@ -1,7 +1,10 @@
 package tradr.model.a3c
 
 import java.io.File
+import java.net.InetSocketAddress
 
+import com.datastax.oss.driver.api.core.{Cluster, CqlIdentifier}
+import com.datastax.oss.driver.internal.core.config.typesafe.DefaultDriverConfigLoader
 import com.typesafe.config.Config
 import org.deeplearning4j.nn.conf.inputs.InputType
 import org.deeplearning4j.nn.conf.layers.{ConvolutionLayer, DenseLayer}
@@ -13,8 +16,10 @@ import org.deeplearning4j.util.ModelSerializer
 import org.nd4j.linalg.activations.Activation
 import org.nd4j.linalg.api.ndarray.INDArray
 import org.nd4j.linalg.factory.Nd4j
+import tradr.common.PricingPoint
 import tradr.common.models.Model
 import tradr.common.trading.{Action, Instruments, Trade}
+
 
 object A3CModel {
 
@@ -123,42 +128,167 @@ object A3CModel {
       .build()
   }
 
-  def getRateFromCassandra(instrument: Instruments.Value, start: Long, end: Long) = {
 
+  private[this] def getCassandraCluster(conf: Config): Cluster = {
 
+    val cassandraIp = conf.getString("cassandra.ip")
+    val cassandraPort = conf.getString("cassandra.connectorPort").toInt
+    println(s"Connecting to cassandra at $cassandraIp:$cassandraPort")
 
+    val inetSocketAddress = InetSocketAddress.createUnresolved(cassandraIp, cassandraPort)
+    val defaultConfig = new DefaultDriverConfigLoader()
+    Cluster
+      .builder()
+      .addContactPoint(inetSocketAddress)
+      .build()
   }
 
-  def padTradesWithHold(trade: Trade, config: Config) = {
-    val tradeInterval = config.getInt("tradr.trader.interval")
+
+  /**
+    * Request Cassandra to get all the data needed for a prediction
+    * @param conf
+    * @return
+    */
+  private[this] def getRates(from: Long, to: Long,
+               instrument: Instruments.Value, conf: Config): Seq[PricingPoint] = {
+    val cassandra = getCassandraCluster(conf)
+
+    val keyspace = conf.getString("cassandra.keyspace")
+    val tablename = conf.getString("cassandra.currencyTable")
+
+    val cqlKeyspace = CqlIdentifier.fromInternal(s"$keyspace")
+    val session = cassandra.connect(cqlKeyspace)
+
+    // Maybe async execution? However, we have no batch, only one statement to execute
+    // and we can't do anything without the data so it might as well be this simple request
+    val resultSet = session.execute(
+      s"SELECT * from $keyspace.$tablename " +
+        s"WHERE instrument = '${instrument.toString}' " +
+        s"""AND "timestamp < $to" """+
+        s"AND timestamp >= $from"
+    )
+
+    var results = Seq[PricingPoint]()
+    val it = resultSet.iterator()
+    while (it.hasNext) {
+      val row = it.next
+      val point = PricingPoint(
+        timestamp = row.getLong(0),
+        currencyPair = row.getString(1),
+        value = row.getDouble(2))
+      results = results :+ point
+    }
+
+    results
+  }
 
 
-    trade
-      .tradeSequence
+
+
+  /**
+    * Convert the data from cassandra into a (multidimensional) frame
+    * We look at a certain time window in cassandra and compute a fixed set of input
+    * pixels for the NN. In this very first version, we will just take the mean of pixels
+    * within a distinct bin.
+    * I.e.: Bin the data, compute Mean of PricingPoints and return as Array
+    *
+    * If we do not have enough data to fill the array we need to throw an error
+    */
+  private[this] def convertToFrame(pricingPoints: Seq[PricingPoint],
+                     inputSize: Int,
+                     start: Long, end: Long): Array[Double] = {
+
+    val stepSize = (end - start)/inputSize
+    val range = start until end by stepSize
+
+    range
       .indices
-      .drop(1)
-      .foldLeft(Seq(trade.tradeSequence.head)){
-        case (seq, i) => {
-
-          // Get the time diff in seconds. For each second that no trade occurred we assume
-          // The proposed action was a HOLD
-          val start = trade.tradeSequence(i-1).time + tradeInterval
-          val end = trade.tradeSequence(i).time
-
-          val holdTrades = (start until end by tradeInterval).map(
-            t => trade.tradeSequence.head.copy(
-              id = t,
-              action = Action.Hold,
-              time = t,
-              portfolioChange = trade.tradeSequence.head.portfolioChange.mapValues(_ => 0.0)
-            )
-          )
-
-          seq ++ holdTrades ++ Array(trade.tradeSequence(i))
-
-        }
-      }
+      .map(i => {
+        val filteredSet = pricingPoints
+          .filter(point => point.timestamp > range(i) && point.timestamp <= range(i+1))
+          .map(_.value)
+        assert(filteredSet.nonEmpty)
+        filteredSet.sum / filteredSet.size.toDouble
+      })
+      .toArray
   }
+
+
+  def getFrame(now: Long, conf: Config): Array[Double] = {
+    val inputSize = conf.getInt("tradr.predictor.frameSize")
+    val prev = now - (1000L * 60 * 60)
+    val pricingPoints = getRates(now, prev, Instruments.EURUSD, conf)
+    convertToFrame(pricingPoints, inputSize, prev, now)
+  }
+
+
+  private[this] def getPredictions(from: Long, to: Long, modelName: String, conf: Config) = {
+    val cassandra = getCassandraCluster(conf)
+
+    val keyspace = conf.getString("cassandra.keyspace")
+    val tablename = conf.getString("cassandra.predictionTable")
+
+    val cqlKeyspace = CqlIdentifier.fromInternal(s"$keyspace")
+    val session = cassandra.connect(cqlKeyspace)
+
+    // Maybe async execution? However, we have no batch, only one statement to execute
+    // and we can't do anything without the data so it might as well be this simple request
+    val resultSet = session.execute(
+      s"SELECT * from $keyspace.$tablename " +
+        s"WHERE model = '$modelName' " +
+        s"""AND "timestamp < $to" """+
+        s"AND timestamp >= $from"
+    )
+
+    var results = Seq[A3CPredictionResult]()
+    val it = resultSet.iterator()
+    while (it.hasNext) {
+      val row = it.next
+      val prediction = A3CPredictionResult(
+        model = row.getString(0),
+        timestamp = row.getLong(1),
+        actionProbabilities = row.get[Array[Double]](2, classOf[Array[Double]]),
+        valuePrediction = row.getDouble(3)
+      )
+
+
+      results = results :+ prediction
+    }
+
+    results
+  }
+
+
+//  def padTradesWithHold(trade: Trade, config: Config) = {
+//    val tradeInterval = config.getInt("tradr.trader.interval")
+//
+//
+//    trade
+//      .tradeSequence
+//      .indices
+//      .drop(1)
+//      .foldLeft(Seq(trade.tradeSequence.head)){
+//        case (seq, i) => {
+//
+//          // Get the time diff in seconds. For each second that no trade occurred we assume
+//          // The proposed action was a HOLD
+//          val start = trade.tradeSequence(i-1).time + tradeInterval
+//          val end = trade.tradeSequence(i).time
+//
+//          val holdTrades = (start until end by tradeInterval).map(
+//            t => trade.tradeSequence.head.copy(
+//              id = t,
+//              action = Action.Hold,
+//              time = t,
+//              portfolioChange = trade.tradeSequence.head.portfolioChange.mapValues(_ => 0.0)
+//            )
+//          )
+//
+//          seq ++ holdTrades ++ Array(trade.tradeSequence(i))
+//
+//        }
+//      }
+//  }
 
 
 //  /**
@@ -267,7 +397,7 @@ case class A3CModel(
     * Train the model on a given set of trades
     * @return
     */
-  def train(trades: Array[Trade]): Model = {
+  def train(trades: Array[Trade]): A3CModel = {
     this
 
 //    val conf = ConfigFactory.load()

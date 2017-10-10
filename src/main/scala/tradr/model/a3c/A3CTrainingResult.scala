@@ -14,7 +14,5 @@ case class A3cTrainingResult(
                               timestamp: Long,
                               modelid: String,
                               tradeId: String,
-                              loss: Double,
-                            ) extends TrainingResult {
-
-}
+                              loss: Double
+                            ) extends TrainingResult
