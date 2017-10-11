@@ -2,7 +2,7 @@
 lazy val libdeps = Seq(
   "org.deeplearning4j" % "deeplearning4j-core" % "0.9.1",
   "org.nd4j" % "nd4j-native-platform" % "0.9.1",
-  "tradr" %% "tradr-common" % "0.0.+",
+  "tradr" %% "tradr-common" % "0.0.5",
   "com.datastax.oss" % "java-driver-core" % "4.0.0-alpha1",
   "com.datastax.oss" % "java-driver-parent" % "4.0.0-alpha1"
 )
