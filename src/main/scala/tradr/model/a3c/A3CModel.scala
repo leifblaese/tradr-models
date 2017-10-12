@@ -598,7 +598,6 @@ case class A3CModel(
     val predictions = getPredictions(from, to, id, conf)
     // Get portfolio snapshots of the time frame
     val portfolios = getPortfolioValues(portfolioId, from, to, conf)
-
     // Map the predictions and portfolios to each other
     val predictionPortfolioMap = mapPredictionsAndPortfolios(predictions, portfolios, tradingFrequency)
 
