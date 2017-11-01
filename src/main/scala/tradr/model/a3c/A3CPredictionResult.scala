@@ -8,5 +8,4 @@ case class A3CPredictionResult(
                               actionProbabilities: Array[Double],
                               valuePrediction: Double
                               ) {
-
 }

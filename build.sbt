@@ -4,11 +4,13 @@ lazy val libdeps = Seq(
   "org.nd4j" % "nd4j-native-platform" % "0.9.1",
   "tradr" %% "tradr-common" % "0.0.5",
   "com.datastax.oss" % "java-driver-core" % "4.0.0-alpha1",
-  "com.datastax.oss" % "java-driver-parent" % "4.0.0-alpha1"
+  "com.datastax.oss" % "java-driver-parent" % "4.0.0-alpha1",
+  "tradr" %% "tradr-cassandra-connector" % "0.0.2"
 )
 
 
 lazy val root = (project in file("."))
+  .configs(IntegrationTest)
   .settings(Seq(
     name := "tradr-models",
     organization := "tradr",
