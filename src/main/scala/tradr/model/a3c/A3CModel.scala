@@ -2,10 +2,17 @@ package tradr.model.a3c
 
 import java.io.File
 
-import com.typesafe.config.Config
+import com.typesafe.config.{Config, ConfigFactory}
 import org.deeplearning4j.nn.graph.ComputationGraph
 import org.deeplearning4j.util.ModelSerializer
 import org.nd4j.linalg.factory.Nd4j
+import play.api.libs.json.{JsValue, Json}
+import tradr.cassandraconnector.CassandraConnector
+import tradr.common.PricingPoint
+import tradr.common.predictor.{PredictionRequest, PredictionResult}
+import tradr.common.trading.Instruments
+
+import scala.concurrent.Future
 
 object A3CModel {
 
@@ -60,31 +67,108 @@ object A3CModel {
     )
   }
 
-}
-
-case class A3CModel(
-                    id: String,
-                    network: ComputationGraph
-                   ) {
 
   /**
-    * Predict for a given frame and return the action probabilities
+    * Create a frame for the prediction
+    * @param now
+    * @param conf
     * @return
     */
-  def predict(frame: Array[Double]): Map[String, Array[Double]] = {
-    // Convert end a mllib vector
-    val indFrame = Nd4j.create(frame)
-    val indResults = network.output(indFrame)
+  def getFrame(now: Long,
+               instrument: Instruments.Value,
+               conf: Config): Future[Array[Double]] = {
+    val inputSize = conf.getInt("tradr.predictor.frameSize")
+    val prev = now - (1000L * 60 * 60)
+    val pricingPoints = CassandraConnector.getRates(prev, now, instrument, conf)
+    pricingPoints.map{
+      points => convertToFrame(points, inputSize, prev, now)
+    }
+  }
 
-    indResults
-      .map(indarray => indarray.data().asDouble())
-      .zipWithIndex
-      .map{
-        case (arr, 0) => "probabilities" -> arr
-        case (arr, 1) => "valueFun" -> arr
-      }
-      .toMap
+  /**
+    * Convert the data start cassandra into a (multidimensional) frame
+    * We look at a certain time window in cassandra and compute a fixed set of input
+    * pixels for the NN. In this very first version, we will just take the mean of pixels
+    * within a distinct bin.
+    * I.e.: Bin the data, compute Mean of PricingPoints and return as Array
+    *
+    * If we do not have enough data end fill the array we need end throw an error
+    */
+  private def convertToFrame(pricingPoints: Seq[PricingPoint],
+                             inputSize: Int,
+                             start: Long, end: Long): Array[Double] = {
+
+    val stepSize = (end - start)/inputSize
+    val range = start until end by stepSize
+
+    range
+      .indices
+      .map(i => {
+        val filteredSet = pricingPoints
+          .filter(point => point.timestamp > range(i) && point.timestamp <= range(i+1))
+          .map(_.value)
+        assert(filteredSet.nonEmpty)
+        filteredSet.sum / filteredSet.size.toDouble
+      })
+      .toArray
   }
 
 
+  /**
+    * Answer a prediction request for a certain timestamp
+    * @return
+    */
+  def predict(predictionRequest: String): Map[String, Array[Double]] = {
+    val conf = ConfigFactory.load()
+
+
+    val request = Json.parse(predictionRequest).as[PredictionRequest]
+    val modelid = "model1.network"
+
+        Json.toJson(predictionResult)(PredictionResult.writes)
+
+    }
+
+
+
+  def predict(
+               predictionRequest: PredictionRequest,
+               cassandraConnector: CassandraConnector,
+               network: ComputationGraph): PredictionResult = {
+
+    val futureFrame = getFrame(request.timestamp, Instruments.get(request.instrument), conf)
+
+    futureFrame.map {
+      frame =>
+        val network = A3CModel.load(modelid, conf)
+        val indFrame = Nd4j.create(frame)
+        val indResults = network.output(indFrame)
+
+        val actionAndValuePrediction = indResults
+          .map(indarray => indarray.data().asDouble())
+          .zipWithIndex
+          .map {
+            case (arr, 0) => "probabilities" -> arr
+            case (arr, 1) => "valueFun" -> arr
+          }
+          .toMap
+
+        val predictionResult = PredictionResult(
+          timestamp = System.currentTimeMillis(),
+          modelId = modelid,
+          predictionId = 1,
+          results = actionAndValuePrediction
+        )
+    }
+  }
 }
+
+//case class A3CModel(
+//                    id: String,
+//                    network: ComputationGraph
+//                   ) {
+//
+//  import A3CModel._
+//
+//
+//}

@@ -1,27 +1,14 @@
 package tradr.model.a3c
 
-import java.io.File
-import java.net.InetSocketAddress
-import java.util
-
-import com.datastax.oss.driver.api.core.{Cluster, CqlIdentifier}
-import com.datastax.oss.driver.internal.core.config.typesafe.DefaultDriverConfigLoader
 import com.typesafe.config.Config
-import org.deeplearning4j.nn.conf.inputs.InputType
-import org.deeplearning4j.nn.conf.layers.{ConvolutionLayer, DenseLayer}
-import org.deeplearning4j.nn.conf.{ComputationGraphConfiguration, NeuralNetConfiguration}
-import org.deeplearning4j.nn.gradient.{DefaultGradient, Gradient}
+import org.deeplearning4j.nn.gradient.Gradient
 import org.deeplearning4j.nn.graph.ComputationGraph
-import org.deeplearning4j.nn.weights.WeightInit
-import org.deeplearning4j.util.ModelSerializer
-import org.nd4j.linalg.activations.Activation
-import org.nd4j.linalg.api.ndarray.INDArray
 import org.nd4j.linalg.factory.Nd4j
 import tradr.cassandraconnector.CassandraConnector
 import tradr.common.PricingPoint
+import tradr.common.predictor.PredictionResult
 import tradr.common.trading._
 
-import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor, Future}
 import scala.util.Random
 
@@ -30,75 +17,36 @@ import scala.util.Random
 
 object A3CEstimator {
 
-  /**
-    * Convert the data start cassandra into a (multidimensional) frame
-    * We look at a certain time window in cassandra and compute a fixed set of input
-    * pixels for the NN. In this very first version, we will just take the mean of pixels
-    * within a distinct bin.
-    * I.e.: Bin the data, compute Mean of PricingPoints and return as Array
-    *
-    * If we do not have enough data end fill the array we need end throw an error
-    */
-  private def convertToFrame(pricingPoints: Seq[PricingPoint],
-                             inputSize: Int,
-                             start: Long, end: Long): Array[Double] = {
-
-    val stepSize = (end - start)/inputSize
-    val range = start until end by stepSize
-
-    range
-      .indices
-      .map(i => {
-        val filteredSet = pricingPoints
-          .filter(point => point.timestamp > range(i) && point.timestamp <= range(i+1))
-          .map(_.value)
-        assert(filteredSet.nonEmpty)
-        filteredSet.sum / filteredSet.size.toDouble
-      })
-      .toArray
-  }
-
-
-  /**
-    * Create a frame for the prediction
-    * @param now
-    * @param conf
-    * @return
-    */
-  def getFrame(now: Long, conf: Config): Future[Array[Double]] = {
-    val inputSize = conf.getInt("tradr.predictor.frameSize")
-    val prev = now - (1000L * 60 * 60)
-    val pricingPoints = CassandraConnector.getRates(prev, now, Instruments.EURUSD, conf)
-    pricingPoints.map{
-      points => convertToFrame(points, inputSize, prev, now)
-    }
-  }
 
 
 
   /**
     * Compute the errors for a prediction and the resulting portfolio
-    * @param prediction
+    * @param predictionResult
     * @param portfolio
     * @param initialR
     * @param gamma
     * @param profit
     * @return
     */
-  private def computeError(prediction: A3CPredictionResult,
+  private def computeError(predictionResult: PredictionResult,
                    portfolio: Portfolio,
                    initialR: Double,
                    gamma: Double,
                    profit: Double) = {
 
+    val probabilities = predictionResult
+      .results("probabilities")
+    val valuePrediction = predictionResult
+      .results("valuePrediction")
+      .head
     val R = gamma * initialR + profit
 
-    val actionProbError = prediction
-      .actionProbabilities
+    val actionProbError = probabilities
       .map(Math.log)
-      .map(_ * (R - prediction.valuePrediction))
+      .map(_ * (R - valuePrediction))
 
-    val valueFunError = Math.pow(R - prediction.valuePrediction, 2.0)
+    val valueFunError = Math.pow(R - valuePrediction, 2.0)
 
     (actionProbError, valueFunError, R)
   }
@@ -106,14 +54,17 @@ object A3CEstimator {
 
   /**
     * Compute errors for a certain time frame
-    * @param gamma
-    * @param predictionPortfolioPairs
+    * @param gamma decay factor for expected returns over time
+    * @param predictionPortfolioPairs Pairs of predicitons and the resulting portfolio changes
     * @return
     */
   private def computeAllErrors(gamma: Double,
-                       predictionPortfolioPairs: Seq[(A3CPredictionResult, Portfolio)]) = {
-    val lastCurrencyValue = predictionPortfolioPairs.last._2.currencies(Currencies.EUR)
-    val firstR = predictionPortfolioPairs.last._1.valuePrediction
+                       predictionPortfolioPairs: Seq[(PredictionResult, Portfolio)]) = {
+
+    val (predictionResult, portfolio) = predictionPortfolioPairs.last
+
+    val lastCurrencyValue = portfolio.currencies(Currencies.EUR)
+    val firstR = predictionResult.results("valuePrediction").head
 
 
     // For all portfolioPairs: Create the error
@@ -126,7 +77,6 @@ object A3CEstimator {
 
           val (prediction, portfolio) = predictionPortfolioPairs(i)
           val profit = lastCurrencyValue - portfolio.currencies(Currencies.EUR)
-
           val (actionProbErr, valueFunErr, newR) = computeError(prediction, portfolio, prevR, gamma, profit)
 
           (actionProbErrs :+ actionProbErr, valueFunErrs :+ valueFunErr, newR)
@@ -146,7 +96,7 @@ object A3CEstimator {
   private def update(
               network: ComputationGraph,
               gamma: Double,
-              predictionPortfolioPairs: Future[Seq[(A3CPredictionResult, Portfolio)]],
+              predictionPortfolioPairs: Future[Seq[(PredictionResult, Portfolio)]],
               ): Future[ComputationGraph] = {
 
     predictionPortfolioPairs.map{
@@ -188,18 +138,18 @@ object A3CEstimator {
     * we take the first one (this rule might change later on)
     * @param predictionsFuture Future of the predictions from cassandra
     * @param portfoliosFuture Future of the portfolios from cassandra
-    * @param tradingFrequency
+    * @param tradingFrequency Frequency of trading (e.g 1/minute)
     * @return
     */
   def mapPredictionsAndPortfolios(
-                                  predictionsFuture: Future[Seq[A3CPredictionResult]],
+                                  predictionsFuture: Future[Seq[PredictionResult]],
                                   portfoliosFuture: Future[Seq[(Long, Portfolio)]],
-                                  tradingFrequency: Int): Future[Seq[(A3CPredictionResult, Portfolio)]] = {
+                                  tradingFrequency: Int): Future[Seq[(PredictionResult, Portfolio)]] = {
     implicit val ec: ExecutionContextExecutor = ExecutionContext.global
     predictionsFuture.flatMap {
       predictions =>
 
-        val a: Seq[Future[(A3CPredictionResult, Portfolio)]] = predictions
+        val a: Seq[Future[(PredictionResult, Portfolio)]] = predictions
           .map { prediction =>
             val t = prediction.timestamp
             val portfolioOpt = portfoliosFuture
@@ -228,24 +178,28 @@ object A3CEstimator {
   /**
     *
     * Train the model start the predictions that occurred on the specific timeframe
-    * @param start
-    * @param end
+    * @param start start of the timeframe used to update the network
+    * @param end end of the time frame used to update the network
+    * @param model Model to train
+    * @param portfolioId Which portfolio to use
+    * @param conf Typesafe config to use
     */
   def train(start: Long,
             end: Long,
-            model: A3CModel,
+            network: ComputationGraph,
             portfolioId: String,
-            conf: Config): Future[A3CModel] = {
+            modelId: String,
+            conf: Config): Future[ComputationGraph] = {
 
     val tradingFrequency = conf.getInt("tradr.trader.tradingFrequency")
     val gamma = conf.getDouble("tradr.predictor.a3c.gamma")
 
     // Step through the time window by steps of length batchsize
-    val steps = (start until end by model.network.batchSize())
-      .zip(start + model.network.batchSize() to end by model.network.batchSize())
+    val steps = (start until end by network.batchSize())
+      .zip(start + network.batchSize() to end by network.batchSize())
 
     // Create a future of the computation graph to update it
-    val futureNetwork = Future{model.network}
+    val futureNetwork = Future{network}
 
     // Go through the shuffled steps and update the network
     val updatedNetwork = Random
@@ -254,11 +208,20 @@ object A3CEstimator {
         case (net, (from, until)) =>
           // Get predicitions of the time frame
           val predictions = CassandraConnector
-            .getPredictions(from, until, model.id, conf)
+            .getPredictions(from, until, modelId, conf)
             .map{
               predValSeq => predValSeq.map{
                 case (name, timestamp, probabilities, valuePrediction) =>
-                  A3CPredictionResult(timestamp, name, probabilities, valuePrediction)
+                  PredictionResult(
+                    "predictionID",
+                    timestamp,
+                    name,
+                    Map(
+                      "probabilities" -> probabilities,
+                      "valuePrediction" -> valuePrediction
+                    )
+                  )
+//                  A3CPredictionResult(timestamp, name, probabilities, valuePrediction)
               }
             }
 
