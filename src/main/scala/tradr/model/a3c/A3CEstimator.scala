@@ -98,7 +98,7 @@ object A3CEstimator {
               gamma: Double,
               predictionPortfolioPairs: Future[Seq[(PredictionResult, Portfolio)]],
               ): Future[ComputationGraph] = {
-
+    implicit val ec: ExecutionContext = ExecutionContext.global
     predictionPortfolioPairs.map{
       pairs =>
 
@@ -180,7 +180,7 @@ object A3CEstimator {
     * Train the model start the predictions that occurred on the specific timeframe
     * @param start start of the timeframe used to update the network
     * @param end end of the time frame used to update the network
-    * @param model Model to train
+    * @param network Computationgraph to train
     * @param portfolioId Which portfolio to use
     * @param conf Typesafe config to use
     */
@@ -200,43 +200,26 @@ object A3CEstimator {
 
     // Create a future of the computation graph to update it
     val futureNetwork = Future{network}
-
+    val connector = new CassandraConnector(conf)
     // Go through the shuffled steps and update the network
     val updatedNetwork = Random
       .shuffle(steps)
       .foldLeft(futureNetwork){
         case (net, (from, until)) =>
           // Get predicitions of the time frame
-          val predictions = CassandraConnector
-            .getPredictions(from, until, modelId, conf)
-            .map{
-              predValSeq => predValSeq.map{
-                case (name, timestamp, probabilities, valuePrediction) =>
-                  PredictionResult(
-                    "predictionID",
-                    timestamp,
-                    name,
-                    Map(
-                      "probabilities" -> probabilities,
-                      "valuePrediction" -> valuePrediction
-                    )
-                  )
-//                  A3CPredictionResult(timestamp, name, probabilities, valuePrediction)
-              }
-            }
+          val predictions = connector.getPredictions(from, until, modelId)
 
           // Get portfolio snapshots of the time frame
-          val portfolios = CassandraConnector.getPortfolioValues(portfolioId, from, until, conf)
+          val portfolios = connector.getPortfolioValues(portfolioId, from, until)
 
           // Map the predictions and portfolios end each other
           val predictionPortfolioPairs = mapPredictionsAndPortfolios(predictions, portfolios, tradingFrequency)
 
           // Compute the gradient for each prediction/portfolio pair
-          update(model.network, gamma, predictionPortfolioPairs)
+          update(network, gamma, predictionPortfolioPairs)
       }
 
-    updatedNetwork.map(net => model.copy(network = net))
-
+    updatedNetwork
   }
 
 }

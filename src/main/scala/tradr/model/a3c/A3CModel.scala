@@ -1,6 +1,7 @@
 package tradr.model.a3c
 
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 import com.typesafe.config.{Config, ConfigFactory}
 import org.deeplearning4j.nn.graph.ComputationGraph
@@ -12,7 +13,8 @@ import tradr.common.PricingPoint
 import tradr.common.predictor.{PredictionRequest, PredictionResult}
 import tradr.common.trading.Instruments
 
-import scala.concurrent.Future
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Future}
 
 object A3CModel {
 
@@ -77,9 +79,11 @@ object A3CModel {
   def getFrame(now: Long,
                instrument: Instruments.Value,
                conf: Config): Future[Array[Double]] = {
+    val connector = new CassandraConnector(conf)
+
     val inputSize = conf.getInt("tradr.predictor.frameSize")
     val prev = now - (1000L * 60 * 60)
-    val pricingPoints = CassandraConnector.getRates(prev, now, instrument, conf)
+    val pricingPoints = connector.getRates(prev, now, instrument)
     pricingPoints.map{
       points => convertToFrame(points, inputSize, prev, now)
     }
@@ -118,29 +122,35 @@ object A3CModel {
     * Answer a prediction request for a certain timestamp
     * @return
     */
-  def predict(predictionRequest: String): Map[String, Array[Double]] = {
+  def handler(jsonRequest: String): String = {
     val conf = ConfigFactory.load()
 
+    val predictionRequest = Json.parse(jsonRequest).as[PredictionRequest]
 
-    val request = Json.parse(predictionRequest).as[PredictionRequest]
-    val modelid = "model1.network"
+    val resultFuture: Future[String] =
+      predict(predictionRequest, conf)
+      .map{
+        predictionResult =>
+          Json.stringify(
+            Json.toJson(predictionResult)(PredictionResult.writes)
+          )
+      }
 
-        Json.toJson(predictionResult)(PredictionResult.writes)
+    Await.result(resultFuture, Duration(1, TimeUnit.MINUTES))
 
-    }
+  }
 
 
 
-  def predict(
-               predictionRequest: PredictionRequest,
-               cassandraConnector: CassandraConnector,
-               network: ComputationGraph): PredictionResult = {
+  def predict(request: PredictionRequest,
+              conf: Config): Future[PredictionResult] = {
 
     val futureFrame = getFrame(request.timestamp, Instruments.get(request.instrument), conf)
 
     futureFrame.map {
       frame =>
-        val network = A3CModel.load(modelid, conf)
+        val modelId = "model1.network"
+        val network = A3CModel.load(modelId, conf)
         val indFrame = Nd4j.create(frame)
         val indResults = network.output(indFrame)
 
@@ -153,22 +163,12 @@ object A3CModel {
           }
           .toMap
 
-        val predictionResult = PredictionResult(
+        PredictionResult(
           timestamp = System.currentTimeMillis(),
-          modelId = modelid,
-          predictionId = 1,
+          modelId = modelId,
+          predictionId = System.currentTimeMillis().toString,
           results = actionAndValuePrediction
         )
     }
   }
 }
-
-//case class A3CModel(
-//                    id: String,
-//                    network: ComputationGraph
-//                   ) {
-//
-//  import A3CModel._
-//
-//
-//}
