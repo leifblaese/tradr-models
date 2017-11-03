@@ -14,7 +14,7 @@ import tradr.common.predictor.{PredictionRequest, PredictionResult}
 import tradr.common.trading.Instruments
 
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, Future}
+import scala.concurrent.{Await, ExecutionContext, Future}
 
 object A3CModel {
 
@@ -80,6 +80,7 @@ object A3CModel {
                instrument: Instruments.Value,
                conf: Config): Future[Array[Double]] = {
     val connector = new CassandraConnector(conf)
+    implicit val ec: ExecutionContext = ExecutionContext.global
 
     val inputSize = conf.getInt("tradr.predictor.frameSize")
     val prev = now - (1000L * 60 * 60)
@@ -124,6 +125,7 @@ object A3CModel {
     */
   def handler(jsonRequest: String): String = {
     val conf = ConfigFactory.load()
+    implicit val ec: ExecutionContext = ExecutionContext.global
 
     val predictionRequest = Json.parse(jsonRequest).as[PredictionRequest]
 
@@ -144,6 +146,7 @@ object A3CModel {
 
   def predict(request: PredictionRequest,
               conf: Config): Future[PredictionResult] = {
+    implicit val ec: ExecutionContext = ExecutionContext.global
 
     val futureFrame = getFrame(request.timestamp, Instruments.get(request.instrument), conf)
 
@@ -160,6 +163,7 @@ object A3CModel {
           .map {
             case (arr, 0) => "probabilities" -> arr
             case (arr, 1) => "valueFun" -> arr
+            case (x, y) => throw new Exception(s"Wrong prediction format: ${x.toSeq.toString}, ${y.toString}")
           }
           .toMap
 

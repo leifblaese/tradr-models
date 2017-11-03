@@ -190,7 +190,7 @@ object A3CEstimator {
             portfolioId: String,
             modelId: String,
             conf: Config): Future[ComputationGraph] = {
-
+    implicit val ec: ExecutionContext = ExecutionContext.global
     val tradingFrequency = conf.getInt("tradr.trader.tradingFrequency")
     val gamma = conf.getDouble("tradr.predictor.a3c.gamma")
 
